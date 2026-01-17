@@ -15,6 +15,7 @@ from quart import (
     render_template,
     current_app,
 )
+from flask import Response
 
 from openai import AsyncAzureOpenAI
 from azure.identity.aio import (
@@ -35,6 +36,8 @@ from backend.utils import (
     convert_to_pf_format,
     format_pf_non_streaming_response,
 )
+from azure.storage.blob import BlobServiceClient
+from azure.core.exceptions import ResourceNotFoundError
 
 bp = Blueprint("routes", __name__, static_folder="static", template_folder="static")
 
@@ -76,6 +79,32 @@ async def favicon():
 @bp.route("/assets/<path:path>")
 async def assets(path):
     return await send_from_directory("static/assets", path)
+
+
+CONTAINER = os.environ.get("AZURE_STORAGE_CONTAINER", "")
+ACCOUNT_URL = os.environ.get("AZURE_STORAGE_ACCOUNT_URL", "")
+CONN_STR = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
+
+
+@bp.route("/api/download", methods=["GET"])
+def download_blob():
+    blob_path = request.args.get("file", "").strip()
+
+    bcs = BlobServiceClient.from_connection_string(CONN_STR)
+    blob_client = bcs.get_blob_client(container=CONTAINER, blob=blob_path)
+    downloader = blob_client.download_blob()
+
+    def generate():
+        for chunk in downloader.chunks():
+            yield chunk
+    
+    return Response(
+        generate(),
+        mimetype="application/pdf",
+        headers={
+            "Content-Disposition": f"inline; filename={blob_path}",
+            "X-Content-Type-Options": "nosniff"},
+    )
 
 
 # Debug settings
@@ -1058,6 +1087,7 @@ async def generate_title(conversation_messages) -> str:
     except Exception as e:
         logging.exception("Exception while generating title", e)
         return messages[-2]["content"]
+
 
 
 app = create_app()
